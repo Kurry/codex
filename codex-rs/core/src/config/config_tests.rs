@@ -102,6 +102,7 @@ use rmcp::model::ElicitationCapability;
 use rmcp::model::FormElicitationCapability;
 use rmcp::model::UrlElicitationCapability;
 
+use codex_config::test_support::CloudConfigBundleFixture;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::Path;
@@ -1313,15 +1314,14 @@ async fn experimental_network_requirements_enable_proxy_without_feature() -> std
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .cloud_requirements(CloudRequirementsLoader::new(async {
-            Ok(Some(codex_config::ConfigRequirementsToml {
-                network: Some(codex_config::NetworkRequirementsToml {
-                    enabled: Some(true),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            }))
-        }))
+        .cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                r#"
+[experimental_network]
+enabled = true
+"#,
+            ),
+        )
         .build()
         .await?;
 
@@ -4274,7 +4274,7 @@ enabled = true
 }
 
 #[tokio::test]
-async fn to_mcp_config_applies_plugin_mcp_cloud_requirements() -> anyhow::Result<()> {
+async fn to_mcp_config_applies_plugin_mcp_cloud_config_bundle() -> anyhow::Result<()> {
     let codex_home = TempDir::new()?;
     let plugin_root = codex_home
         .path()
@@ -4311,27 +4311,16 @@ enabled = true
 "#,
     )?;
 
-    let requirements = codex_config::ConfigRequirementsToml {
-        plugins: Some(BTreeMap::from([(
-            "sample@test".to_string(),
-            codex_config::PluginRequirementsToml {
-                mcp_servers: Some(BTreeMap::from([(
-                    "sample".to_string(),
-                    McpServerRequirement {
-                        identity: McpServerIdentity::Url {
-                            url: "https://sample.example/mcp".to_string(),
-                        },
-                    },
-                )])),
-            },
-        )])),
-        ..Default::default()
-    };
     let config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
-        .cloud_requirements(CloudRequirementsLoader::new(async move {
-            Ok(Some(requirements))
-        }))
+        .cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                r#"
+[plugins."sample@test".mcp_servers.sample.identity]
+url = "https://sample.example/mcp"
+"#,
+            ),
+        )
         .build()
         .await?;
     let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
@@ -4352,7 +4341,10 @@ enabled = true
         Some((
             false,
             Some(McpServerDisabledReason::Requirements {
-                source: RequirementSource::CloudRequirements,
+                source: RequirementSource::EnterpriseManaged {
+                    id: "req_1".to_string(),
+                    name: "Base requirements".to_string(),
+                },
             })
         ))
     );
@@ -4393,15 +4385,15 @@ enabled = true
 "#,
     )?;
 
-    let requirements = codex_config::ConfigRequirementsToml {
-        mcp_servers: Some(BTreeMap::new()),
-        ..Default::default()
-    };
     let config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
-        .cloud_requirements(CloudRequirementsLoader::new(async move {
-            Ok(Some(requirements))
-        }))
+        .cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                r#"
+[mcp_servers]
+"#,
+            ),
+        )
         .build()
         .await?;
     let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
@@ -4415,7 +4407,10 @@ enabled = true
         Some((
             false,
             Some(McpServerDisabledReason::Requirements {
-                source: RequirementSource::CloudRequirements,
+                source: RequirementSource::EnterpriseManaged {
+                    id: "req_1".to_string(),
+                    name: "Base requirements".to_string(),
+                },
             })
         ))
     );
@@ -4974,7 +4969,7 @@ async fn managed_config_overrides_oauth_store_mode() -> anyhow::Result<()> {
         Some(cwd),
         &Vec::new(),
         overrides,
-        CloudRequirementsLoader::default(),
+        CloudConfigBundleLoader::default(),
         &codex_config::NoopThreadConfigLoader,
     )
     .await?;
@@ -5108,7 +5103,7 @@ async fn managed_config_wins_over_cli_overrides() -> anyhow::Result<()> {
         Some(cwd),
         &[("model".to_string(), TomlValue::String("cli".to_string()))],
         overrides,
-        CloudRequirementsLoader::default(),
+        CloudConfigBundleLoader::default(),
         &codex_config::NoopThreadConfigLoader,
     )
     .await?;
@@ -8808,12 +8803,11 @@ async fn requirements_disallowing_default_sandbox_falls_back_to_required_default
 
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
-        .cloud_requirements(CloudRequirementsLoader::new(async {
-            Ok(Some(codex_config::ConfigRequirementsToml {
-                allowed_sandbox_modes: Some(vec![codex_config::SandboxModeRequirement::ReadOnly]),
-                ..Default::default()
-            }))
-        }))
+        .cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                r#"allowed_sandbox_modes = ["read-only"]"#,
+            ),
+        )
         .build()
         .await?;
     assert_eq!(
@@ -8832,34 +8826,14 @@ async fn explicit_sandbox_mode_falls_back_when_disallowed_by_requirements() -> s
 "#,
     )?;
 
-    let requirements = codex_config::ConfigRequirementsToml {
-        allowed_approval_policies: None,
-        allowed_approvals_reviewers: None,
-        allowed_sandbox_modes: Some(vec![codex_config::SandboxModeRequirement::ReadOnly]),
-        allowed_permissions: None,
-        remote_sandbox_config: None,
-        allowed_web_search_modes: None,
-        allow_managed_hooks_only: None,
-        allow_appshots: None,
-        computer_use: None,
-        feature_requirements: None,
-        hooks: None,
-        mcp_servers: None,
-        plugins: None,
-        apps: None,
-        rules: None,
-        enforce_residency: None,
-        network: None,
-        permissions: None,
-        guardian_policy_config: None,
-    };
-
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .cloud_requirements(CloudRequirementsLoader::new(async move {
-            Ok(Some(requirements))
-        }))
+        .cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                r#"allowed_sandbox_modes = ["read-only"]"#,
+            ),
+        )
         .build()
         .await?;
     assert_eq!(
@@ -8883,12 +8857,11 @@ sandbox_mode = "danger-full-access"
     let err = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .cloud_requirements(CloudRequirementsLoader::new(async {
-            Ok(Some(codex_config::ConfigRequirementsToml {
-                allowed_sandbox_modes: Some(vec![codex_config::SandboxModeRequirement::ReadOnly]),
-                ..Default::default()
-            }))
-        }))
+        .cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                r#"allowed_sandbox_modes = ["read-only"]"#,
+            ),
+        )
         .build()
         .await
         .expect_err("requirements-constrained yolo should require sandbox approval");
@@ -8918,12 +8891,11 @@ default_permissions = "dev"
     let err = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .cloud_requirements(CloudRequirementsLoader::new(async {
-            Ok(Some(codex_config::ConfigRequirementsToml {
-                allowed_sandbox_modes: Some(vec![codex_config::SandboxModeRequirement::ReadOnly]),
-                ..Default::default()
-            }))
-        }))
+        .cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                r#"allowed_sandbox_modes = ["read-only"]"#,
+            ),
+        )
         .build()
         .await
         .expect_err("requirements-constrained full-access profile should require sandbox approval");
@@ -8940,11 +8912,6 @@ default_permissions = "dev"
 async fn permission_profile_override_falls_back_when_disallowed_by_requirements()
 -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
-    let requirements = codex_config::ConfigRequirementsToml {
-        allowed_sandbox_modes: Some(vec![codex_config::SandboxModeRequirement::ReadOnly]),
-        ..Default::default()
-    };
-
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
@@ -8952,9 +8919,11 @@ async fn permission_profile_override_falls_back_when_disallowed_by_requirements(
             permission_profile: Some(PermissionProfile::Disabled),
             ..Default::default()
         })
-        .cloud_requirements(CloudRequirementsLoader::new(async move {
-            Ok(Some(requirements))
-        }))
+        .cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                r#"allowed_sandbox_modes = ["read-only"]"#,
+            ),
+        )
         .build()
         .await?;
 
@@ -8970,11 +8939,6 @@ async fn permission_profile_override_falls_back_when_disallowed_by_requirements(
 #[tokio::test]
 async fn active_profile_is_cleared_when_requirements_force_fallback() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
-    let requirements = codex_config::ConfigRequirementsToml {
-        allowed_sandbox_modes: Some(vec![codex_config::SandboxModeRequirement::ReadOnly]),
-        ..Default::default()
-    };
-
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
@@ -8982,9 +8946,11 @@ async fn active_profile_is_cleared_when_requirements_force_fallback() -> std::io
             default_permissions: Some(BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS.to_string()),
             ..Default::default()
         })
-        .cloud_requirements(CloudRequirementsLoader::new(async move {
-            Ok(Some(requirements))
-        }))
+        .cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                r#"allowed_sandbox_modes = ["read-only"]"#,
+            ),
+        )
         .build()
         .await?;
 
@@ -9094,14 +9060,11 @@ async fn requirements_web_search_mode_overrides_danger_full_access_default() -> 
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .cloud_requirements(CloudRequirementsLoader::new(async {
-            Ok(Some(codex_config::ConfigRequirementsToml {
-                allowed_web_search_modes: Some(vec![
-                    codex_config::WebSearchModeRequirement::Cached,
-                ]),
-                ..Default::default()
-            }))
-        }))
+        .cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                r#"allowed_web_search_modes = ["cached"]"#,
+            ),
+        )
         .build()
         .await?;
 
@@ -9135,12 +9098,11 @@ trust_level = "untrusted"
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(workspace.path().to_path_buf()))
-        .cloud_requirements(CloudRequirementsLoader::new(async {
-            Ok(Some(codex_config::ConfigRequirementsToml {
-                allowed_approval_policies: Some(vec![AskForApproval::OnRequest]),
-                ..Default::default()
-            }))
-        }))
+        .cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                r#"allowed_approval_policies = ["on-request"]"#,
+            ),
+        )
         .build()
         .await?;
 
@@ -9164,12 +9126,11 @@ async fn explicit_approval_policy_falls_back_when_disallowed_by_requirements() -
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .cloud_requirements(CloudRequirementsLoader::new(async {
-            Ok(Some(codex_config::ConfigRequirementsToml {
-                allowed_approval_policies: Some(vec![AskForApproval::OnRequest]),
-                ..Default::default()
-            }))
-        }))
+        .cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                r#"allowed_approval_policies = ["on-request"]"#,
+            ),
+        )
         .build()
         .await?;
     assert_eq!(
@@ -9185,17 +9146,15 @@ async fn feature_requirements_normalize_effective_feature_values() -> std::io::R
 
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
-        .cloud_requirements(CloudRequirementsLoader::new(async {
-            Ok(Some(codex_config::ConfigRequirementsToml {
-                feature_requirements: Some(codex_config::FeatureRequirementsToml {
-                    entries: BTreeMap::from([
-                        ("personality".to_string(), true),
-                        ("shell_tool".to_string(), false),
-                    ]),
-                }),
-                ..Default::default()
-            }))
-        }))
+        .cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                r#"
+[features]
+personality = true
+shell_tool = false
+"#,
+            ),
+        )
         .build()
         .await?;
 
@@ -9219,14 +9178,14 @@ async fn feature_requirements_auto_review_disables_guardian_approval() -> std::i
 
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
-        .cloud_requirements(CloudRequirementsLoader::new(async {
-            Ok(Some(codex_config::ConfigRequirementsToml {
-                feature_requirements: Some(codex_config::FeatureRequirementsToml {
-                    entries: BTreeMap::from([("auto_review".to_string(), false)]),
-                }),
-                ..Default::default()
-            }))
-        }))
+        .cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                r#"
+[features]
+auto_review = false
+"#,
+            ),
+        )
         .build()
         .await?;
 
@@ -9241,17 +9200,15 @@ async fn browser_feature_requirements_are_valid() -> std::io::Result<()> {
 
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
-        .cloud_requirements(CloudRequirementsLoader::new(async {
-            Ok(Some(codex_config::ConfigRequirementsToml {
-                feature_requirements: Some(codex_config::FeatureRequirementsToml {
-                    entries: BTreeMap::from([
-                        ("in_app_browser".to_string(), false),
-                        ("browser_use".to_string(), false),
-                    ]),
-                }),
-                ..Default::default()
-            }))
-        }))
+        .cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                r#"
+[features]
+in_app_browser = false
+browser_use = false
+"#,
+            ),
+        )
         .build()
         .await?;
 
@@ -9347,17 +9304,15 @@ shell_tool = true
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .cloud_requirements(CloudRequirementsLoader::new(async {
-            Ok(Some(codex_config::ConfigRequirementsToml {
-                feature_requirements: Some(codex_config::FeatureRequirementsToml {
-                    entries: BTreeMap::from([
-                        ("personality".to_string(), true),
-                        ("shell_tool".to_string(), false),
-                    ]),
-                }),
-                ..Default::default()
-            }))
-        }))
+        .cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                r#"
+[features]
+personality = true
+shell_tool = false
+"#,
+            ),
+        )
         .build()
         .await?;
 
@@ -9467,12 +9422,11 @@ async fn requirements_disallowing_default_approvals_reviewer_falls_back_to_requi
 
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
-        .cloud_requirements(CloudRequirementsLoader::new(async {
-            Ok(Some(codex_config::ConfigRequirementsToml {
-                allowed_approvals_reviewers: Some(vec![ApprovalsReviewer::AutoReview]),
-                ..Default::default()
-            }))
-        }))
+        .cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                r#"allowed_approvals_reviewers = ["guardian_subagent"]"#,
+            ),
+        )
         .build()
         .await?;
 
@@ -9493,12 +9447,11 @@ async fn root_approvals_reviewer_falls_back_when_disallowed_by_requirements() ->
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .cloud_requirements(CloudRequirementsLoader::new(async {
-            Ok(Some(codex_config::ConfigRequirementsToml {
-                allowed_approvals_reviewers: Some(vec![ApprovalsReviewer::AutoReview]),
-                ..Default::default()
-            }))
-        }))
+        .cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                r#"allowed_approvals_reviewers = ["guardian_subagent"]"#,
+            ),
+        )
         .build()
         .await?;
 
@@ -9515,6 +9468,37 @@ async fn root_approvals_reviewer_falls_back_when_disallowed_by_requirements() ->
 }
 
 #[tokio::test]
+async fn profile_approvals_reviewer_falls_back_when_disallowed_by_requirements()
+-> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let selected_config = codex_home.path().join("default.config.toml");
+    std::fs::write(
+        &selected_config,
+        r#"approvals_reviewer = "user"
+"#,
+    )?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .loader_overrides(LoaderOverrides {
+            user_config_path: Some(selected_config.abs()),
+            user_config_profile: Some("default".parse().expect("profile-v2 name")),
+            ..LoaderOverrides::without_managed_config_for_tests()
+        })
+        .cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                r#"allowed_approvals_reviewers = ["guardian_subagent"]"#,
+            ),
+        )
+        .build()
+        .await?;
+
+    assert_eq!(config.approvals_reviewer, ApprovalsReviewer::AutoReview);
+    Ok(())
+}
+
+#[tokio::test]
 async fn approvals_reviewer_preserves_valid_user_choice_when_allowed_by_requirements()
 -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
@@ -9527,15 +9511,11 @@ async fn approvals_reviewer_preserves_valid_user_choice_when_allowed_by_requirem
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .cloud_requirements(CloudRequirementsLoader::new(async {
-            Ok(Some(codex_config::ConfigRequirementsToml {
-                allowed_approvals_reviewers: Some(vec![
-                    ApprovalsReviewer::User,
-                    ApprovalsReviewer::AutoReview,
-                ]),
-                ..Default::default()
-            }))
-        }))
+        .cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                r#"allowed_approvals_reviewers = ["user", "guardian_subagent"]"#,
+            ),
+        )
         .build()
         .await?;
 
@@ -9953,17 +9933,15 @@ async fn feature_requirements_normalize_runtime_feature_mutations() -> std::io::
 
     let mut config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
-        .cloud_requirements(CloudRequirementsLoader::new(async {
-            Ok(Some(codex_config::ConfigRequirementsToml {
-                feature_requirements: Some(codex_config::FeatureRequirementsToml {
-                    entries: BTreeMap::from([
-                        ("personality".to_string(), true),
-                        ("shell_tool".to_string(), false),
-                    ]),
-                }),
-                ..Default::default()
-            }))
-        }))
+        .cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                r#"
+[features]
+personality = true
+shell_tool = false
+"#,
+            ),
+        )
         .build()
         .await?;
 
@@ -9989,14 +9967,14 @@ async fn feature_requirements_warn_on_collab_legacy_alias() -> std::io::Result<(
 
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
-        .cloud_requirements(CloudRequirementsLoader::new(async {
-            Ok(Some(codex_config::ConfigRequirementsToml {
-                feature_requirements: Some(codex_config::FeatureRequirementsToml {
-                    entries: BTreeMap::from([("collab".to_string(), true)]),
-                }),
-                ..Default::default()
-            }))
-        }))
+        .cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                r#"
+[features]
+collab = true
+"#,
+            ),
+        )
         .build()
         .await?;
 
@@ -10019,14 +9997,14 @@ async fn feature_requirements_warn_and_ignore_unknown_feature() -> std::io::Resu
 
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
-        .cloud_requirements(CloudRequirementsLoader::new(async {
-            Ok(Some(codex_config::ConfigRequirementsToml {
-                feature_requirements: Some(codex_config::FeatureRequirementsToml {
-                    entries: BTreeMap::from([("made_up_feature".to_string(), true)]),
-                }),
-                ..Default::default()
-            }))
-        }))
+        .cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                r#"
+[features]
+made_up_feature = true
+"#,
+            ),
+        )
         .build()
         .await?;
 

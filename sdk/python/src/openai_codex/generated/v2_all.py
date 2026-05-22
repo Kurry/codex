@@ -49,24 +49,22 @@ class AccountLoginCompletedNotification(BaseModel):
     success: bool
 
 
-class AdditionalWritableRootActivePermissionProfileModification(BaseModel):
+class ActivePermissionProfile(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    path: AbsolutePathBuf
-    type: Annotated[
-        Literal["additionalWritableRoot"],
-        Field(title="AdditionalWritableRootActivePermissionProfileModificationType"),
+    extends: Annotated[
+        str | None,
+        Field(
+            description="Parent profile identifier from the selected permissions profile's `extends` setting, when present."
+        ),
+    ] = None
+    id: Annotated[
+        str,
+        Field(
+            description="Identifier from `default_permissions` or the implicit built-in default, such as `:workspace` or a user-defined `[permissions.<id>]` profile."
+        ),
     ]
-
-
-class ActivePermissionProfileModification(
-    RootModel[AdditionalWritableRootActivePermissionProfileModification]
-):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    root: AdditionalWritableRootActivePermissionProfileModification
 
 
 class AddCreditsNudgeCreditType(Enum):
@@ -251,6 +249,11 @@ class AuthMode(Enum):
     chatgpt = "chatgpt"
     chatgpt_auth_tokens = "chatgptAuthTokens"
     agent_identity = "agentIdentity"
+
+
+class AutoCompactTokenLimitScope(Enum):
+    total = "total"
+    body_after_prefix = "body_after_prefix"
 
 
 class AutoReviewDecisionSource(RootModel[Literal["agent"]]):
@@ -565,6 +568,13 @@ class CommandMigration(BaseModel):
     name: str
 
 
+class ComputerUseRequirements(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    allow_locked_computer_use: Annotated[bool | None, Field(alias="allowLockedComputerUse")] = None
+
+
 class MdmConfigLayerSource(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -587,6 +597,22 @@ class SystemConfigLayerSource(BaseModel):
     type: Annotated[Literal["system"], Field(title="SystemConfigLayerSourceType")]
 
 
+class EnterpriseManagedConfigLayerSource(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: Annotated[str, Field(description="Stable identifier for the delivered layer.")]
+    name: Annotated[
+        str,
+        Field(
+            description="Admin-facing name for the delivered layer. This is surfaced in diagnostics so users know which cloud layer needs administrator attention."
+        ),
+    ]
+    type: Annotated[
+        Literal["enterpriseManaged"], Field(title="EnterpriseManagedConfigLayerSourceType")
+    ]
+
+
 class UserConfigLayerSource(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -597,6 +623,12 @@ class UserConfigLayerSource(BaseModel):
             description="This is the path to the user's config.toml file, though it is not guaranteed to exist."
         ),
     ]
+    profile: Annotated[
+        str | None,
+        Field(
+            description="Name of the selected profile-v2 config layered on top of the base user config, when this layer represents one."
+        ),
+    ] = None
     type: Annotated[Literal["user"], Field(title="UserConfigLayerSourceType")]
 
 
@@ -640,6 +672,7 @@ class ConfigLayerSource(
     RootModel[
         MdmConfigLayerSource
         | SystemConfigLayerSource
+        | EnterpriseManagedConfigLayerSource
         | UserConfigLayerSource
         | ProjectConfigLayerSource
         | SessionFlagsConfigLayerSource
@@ -653,6 +686,7 @@ class ConfigLayerSource(
     root: (
         MdmConfigLayerSource
         | SystemConfigLayerSource
+        | EnterpriseManagedConfigLayerSource
         | UserConfigLayerSource
         | ProjectConfigLayerSource
         | SessionFlagsConfigLayerSource
@@ -671,7 +705,7 @@ class ConfigReadParams(BaseModel):
             description="Optional working directory to resolve project config layers. If specified, return the effective config as seen from that directory (i.e., including any project layers between `cwd` and the project/repo root)."
         ),
     ] = None
-    include_layers: Annotated[bool | None, Field(alias="includeLayers")] = False
+    include_layers: Annotated[bool | None, Field(alias="includeLayers")] = None
 
 
 class CommandConfiguredHookHandler(BaseModel):
@@ -680,6 +714,7 @@ class CommandConfiguredHookHandler(BaseModel):
     )
     async_: Annotated[bool, Field(alias="async")]
     command: str
+    command_windows: Annotated[str | None, Field(alias="commandWindows")] = None
     status_message: Annotated[str | None, Field(alias="statusMessage")] = None
     timeout_sec: Annotated[int | None, Field(alias="timeoutSec", ge=0)] = None
     type: Annotated[Literal["command"], Field(title="CommandConfiguredHookHandlerType")]
@@ -842,6 +877,13 @@ class ExperimentalFeatureListParams(BaseModel):
         int | None,
         Field(description="Optional page size; defaults to a reasonable server-side value.", ge=0),
     ] = None
+    thread_id: Annotated[
+        str | None,
+        Field(
+            alias="threadId",
+            description="Optional loaded thread id. Pass this when showing feature state for an existing thread so enablement is computed from that thread's refreshed config, including project-local config for the thread's cwd.",
+        ),
+    ] = None
 
 
 class ExperimentalFeatureStage(Enum):
@@ -901,7 +943,7 @@ class FeedbackUploadParams(BaseModel):
     )
     classification: str
     extra_log_files: Annotated[list[str] | None, Field(alias="extraLogFiles")] = None
-    include_logs: Annotated[bool, Field(alias="includeLogs")]
+    include_logs: Annotated[bool | None, Field(alias="includeLogs")] = None
     reason: str | None = None
     tags: dict[str, Any] | None = None
     thread_id: Annotated[str | None, Field(alias="threadId")] = None
@@ -927,7 +969,7 @@ class FileChangeOutputDeltaNotification(BaseModel):
 class FileSystemAccessMode(Enum):
     read = "read"
     write = "write"
-    none = "none"
+    deny = "deny"
 
 
 class PathFileSystemPath(BaseModel):
@@ -1012,6 +1054,18 @@ class FileSystemSpecialPath(
         | SlashTmpFileSystemSpecialPath
         | FileSystemSpecialPath1
     )
+
+
+class ForcedChatgptWorkspaceIds(RootModel[str | list[str]]):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    root: Annotated[
+        str | list[str],
+        Field(
+            description="Backward-compatible API shape for ChatGPT workspace login restrictions."
+        ),
+    ]
 
 
 class ForcedLoginMethod(Enum):
@@ -1252,6 +1306,17 @@ class InputTextFunctionCallOutputContentItem(BaseModel):
     ]
 
 
+class EncryptedContentFunctionCallOutputContentItem(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    encrypted_content: str
+    type: Annotated[
+        Literal["encrypted_content"],
+        Field(title="EncryptedContentFunctionCallOutputContentItemType"),
+    ]
+
+
 class FuzzyFileSearchMatchType(Enum):
     file = "file"
     directory = "directory"
@@ -1311,7 +1376,7 @@ class GetAccountParams(BaseModel):
             alias="refreshToken",
             description="When `true`, requests a proactive token refresh before returning.\n\nIn managed auth mode this triggers the normal refresh-token flow. In external auth mode this flag is ignored. Clients should refresh tokens themselves and call `account/login/start` with `chatgptAuthTokens`.",
         ),
-    ] = False
+    ] = None
 
 
 class GitInfo(BaseModel):
@@ -1401,6 +1466,8 @@ class HookEventName(Enum):
     post_compact = "postCompact"
     session_start = "sessionStart"
     user_prompt_submit = "userPromptSubmit"
+    subagent_start = "subagentStart"
+    subagent_stop = "subagentStop"
     stop = "stop"
 
 
@@ -1459,6 +1526,7 @@ class HookSource(Enum):
     session_flags = "sessionFlags"
     plugin = "plugin"
     cloud_requirements = "cloudRequirements"
+    cloud_managed_config = "cloudManagedConfig"
     legacy_managed_config_file = "legacyManagedConfigFile"
     legacy_managed_config_mdm = "legacyManagedConfigMdm"
     unknown = "unknown"
@@ -1482,8 +1550,6 @@ class HooksListParams(BaseModel):
 
 
 class ImageDetail(Enum):
-    auto = "auto"
-    low = "low"
     high = "high"
     original = "original"
 
@@ -1720,6 +1786,8 @@ class ManagedHooksRequirements(BaseModel):
     pre_tool_use: Annotated[list[ConfiguredHookMatcherGroup], Field(alias="PreToolUse")]
     session_start: Annotated[list[ConfiguredHookMatcherGroup], Field(alias="SessionStart")]
     stop: Annotated[list[ConfiguredHookMatcherGroup], Field(alias="Stop")]
+    subagent_start: Annotated[list[ConfiguredHookMatcherGroup], Field(alias="SubagentStart")]
+    subagent_stop: Annotated[list[ConfiguredHookMatcherGroup], Field(alias="SubagentStop")]
     user_prompt_submit: Annotated[list[ConfiguredHookMatcherGroup], Field(alias="UserPromptSubmit")]
     managed_dir: Annotated[str | None, Field(alias="managedDir")] = None
     windows_managed_dir: Annotated[str | None, Field(alias="windowsManagedDir")] = None
@@ -2166,64 +2234,30 @@ class PatchChangeKind(
     root: AddPatchChangeKind | DeletePatchChangeKind | UpdatePatchChangeKind
 
 
-class DisabledPermissionProfile(BaseModel):
+class PermissionProfileListParams(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    type: Annotated[Literal["disabled"], Field(title="DisabledPermissionProfileType")]
+    cursor: Annotated[
+        str | None, Field(description="Opaque pagination cursor returned by a previous call.")
+    ] = None
+    cwd: Annotated[
+        str | None,
+        Field(description="Optional working directory to resolve project config layers."),
+    ] = None
+    limit: Annotated[
+        int | None, Field(description="Optional page size; defaults to the full result set.", ge=0)
+    ] = None
 
 
-class UnrestrictedPermissionProfileFileSystemPermissions(BaseModel):
+class PermissionProfileSummary(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    type: Annotated[
-        Literal["unrestricted"],
-        Field(title="UnrestrictedPermissionProfileFileSystemPermissionsType"),
-    ]
-
-
-class AdditionalWritableRootPermissionProfileModificationParams(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    path: AbsolutePathBuf
-    type: Annotated[
-        Literal["additionalWritableRoot"],
-        Field(title="AdditionalWritableRootPermissionProfileModificationParamsType"),
-    ]
-
-
-class PermissionProfileModificationParams(
-    RootModel[AdditionalWritableRootPermissionProfileModificationParams]
-):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    root: AdditionalWritableRootPermissionProfileModificationParams
-
-
-class PermissionProfileNetworkPermissions(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    enabled: bool
-
-
-class ProfilePermissionProfileSelectionParams(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    id: str
-    modifications: list[PermissionProfileModificationParams] | None = None
-    type: Annotated[Literal["profile"], Field(title="ProfilePermissionProfileSelectionParamsType")]
-
-
-class PermissionProfileSelectionParams(RootModel[ProfilePermissionProfileSelectionParams]):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    root: ProfilePermissionProfileSelectionParams
+    description: Annotated[
+        str | None, Field(description="Optional user-facing description for display in clients.")
+    ] = None
+    id: Annotated[str, Field(description="Available permission profile identifier.")]
 
 
 class Personality(Enum):
@@ -2298,6 +2332,23 @@ class PluginInstallResponse(BaseModel):
     auth_policy: Annotated[PluginAuthPolicy, Field(alias="authPolicy")]
 
 
+class PluginInstalledParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    cwds: Annotated[
+        list[AbsolutePathBuf] | None,
+        Field(description="Optional working directories used to discover repo marketplaces."),
+    ] = None
+    install_suggestion_plugin_names: Annotated[
+        list[str] | None,
+        Field(
+            alias="installSuggestionPluginNames",
+            description="Additional uninstalled plugin names that should be returned when present locally. This is used by mention surfaces that intentionally expose install entrypoints.",
+        ),
+    ] = None
+
+
 class PluginInterface(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -2353,6 +2404,7 @@ class PluginInterface(BaseModel):
 
 class PluginListMarketplaceKind(Enum):
     local = "local"
+    vertical = "vertical"
     workspace_directory = "workspace-directory"
     shared_with_me = "shared-with-me"
 
@@ -2383,6 +2435,26 @@ class PluginReadParams(BaseModel):
     marketplace_path: Annotated[AbsolutePathBuf | None, Field(alias="marketplacePath")] = None
     plugin_name: Annotated[str, Field(alias="pluginName")]
     remote_marketplace_name: Annotated[str | None, Field(alias="remoteMarketplaceName")] = None
+
+
+class PluginShareCheckoutParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    remote_plugin_id: Annotated[str, Field(alias="remotePluginId")]
+
+
+class PluginShareCheckoutResponse(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    marketplace_name: Annotated[str, Field(alias="marketplaceName")]
+    marketplace_path: Annotated[AbsolutePathBuf, Field(alias="marketplacePath")]
+    plugin_id: Annotated[str, Field(alias="pluginId")]
+    plugin_name: Annotated[str, Field(alias="pluginName")]
+    plugin_path: Annotated[AbsolutePathBuf, Field(alias="pluginPath")]
+    remote_plugin_id: Annotated[str, Field(alias="remotePluginId")]
+    remote_version: Annotated[str | None, Field(alias="remoteVersion")] = None
 
 
 class PluginShareDeleteParams(BaseModel):
@@ -2745,6 +2817,7 @@ class RemoteControlStatusChangedNotification(BaseModel):
     )
     environment_id: Annotated[str | None, Field(alias="environmentId")] = None
     installation_id: Annotated[str, Field(alias="installationId")]
+    server_name: Annotated[str, Field(alias="serverName")]
     status: RemoteControlConnectionStatus
 
 
@@ -2909,6 +2982,13 @@ class CompactionResponseItem(BaseModel):
     )
     encrypted_content: str
     type: Annotated[Literal["compaction"], Field(title="CompactionResponseItemType")]
+
+
+class CompactionTriggerResponseItem(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    type: Annotated[Literal["compaction_trigger"], Field(title="CompactionTriggerResponseItemType")]
 
 
 class ContextCompactionResponseItem(BaseModel):
@@ -3617,7 +3697,28 @@ class ThreadCompactStartResponse(BaseModel):
     )
 
 
+class ThreadGoalClearParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    thread_id: Annotated[str, Field(alias="threadId")]
+
+
+class ThreadGoalClearResponse(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    cleared: bool
+
+
 class ThreadGoalClearedNotification(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    thread_id: Annotated[str, Field(alias="threadId")]
+
+
+class ThreadGoalGetParams(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
@@ -3627,6 +3728,8 @@ class ThreadGoalClearedNotification(BaseModel):
 class ThreadGoalStatus(Enum):
     active = "active"
     paused = "paused"
+    blocked = "blocked"
+    usage_limited = "usageLimited"
     budget_limited = "budgetLimited"
     complete = "complete"
 
@@ -3740,6 +3843,7 @@ class McpToolCallThreadItem(BaseModel):
     error: McpToolCallError | None = None
     id: str
     mcp_app_resource_uri: Annotated[str | None, Field(alias="mcpAppResourceUri")] = None
+    plugin_id: Annotated[str | None, Field(alias="pluginId")] = None
     result: McpToolCallResult | None = None
     server: str
     status: McpToolCallStatus
@@ -3913,7 +4017,7 @@ class ThreadReadParams(BaseModel):
             alias="includeTurns",
             description="When true, include turns and their items from rollout history.",
         ),
-    ] = False
+    ] = None
     thread_id: Annotated[str, Field(alias="threadId")]
 
 
@@ -4308,6 +4412,7 @@ class ImageUserInput(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
+    detail: ImageDetail | None = None
     type: Annotated[Literal["image"], Field(title="ImageUserInputType")]
     url: str
 
@@ -4316,6 +4421,7 @@ class LocalImageUserInput(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
+    detail: ImageDetail | None = None
     path: str
     type: Annotated[Literal["localImage"], Field(title="LocalImageUserInputType")]
 
@@ -4525,30 +4631,6 @@ class AccountUpdatedNotification(BaseModel):
     plan_type: Annotated[PlanType | None, Field(alias="planType")] = None
 
 
-class ActivePermissionProfile(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    extends: Annotated[
-        str | None,
-        Field(
-            description="Parent profile identifier once permissions profiles support inheritance. This is currently always `null`."
-        ),
-    ] = None
-    id: Annotated[
-        str,
-        Field(
-            description="Identifier from `default_permissions` or the implicit built-in default, such as `:workspace` or a user-defined `[permissions.<id>]` profile."
-        ),
-    ]
-    modifications: Annotated[
-        list[ActivePermissionProfileModification] | None,
-        Field(
-            description="Bounded user-requested modifications applied on top of the named profile, if any."
-        ),
-    ] = []
-
-
 class AppConfig(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -4640,6 +4722,24 @@ class ThreadNameSetRequest(BaseModel):
     id: RequestId
     method: Annotated[Literal["thread/name/set"], Field(title="Thread/name/setRequestMethod")]
     params: ThreadSetNameParams
+
+
+class ThreadGoalGetRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[Literal["thread/goal/get"], Field(title="Thread/goal/getRequestMethod")]
+    params: ThreadGoalGetParams
+
+
+class ThreadGoalClearRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[Literal["thread/goal/clear"], Field(title="Thread/goal/clearRequestMethod")]
+    params: ThreadGoalClearParams
 
 
 class ThreadMetadataUpdateRequest(BaseModel):
@@ -4790,6 +4890,15 @@ class PluginListRequest(BaseModel):
     params: PluginListParams
 
 
+class PluginInstalledRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[Literal["plugin/installed"], Field(title="Plugin/installedRequestMethod")]
+    params: PluginInstalledParams
+
+
 class PluginReadRequest(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -4815,6 +4924,17 @@ class PluginShareListRequest(BaseModel):
     id: RequestId
     method: Annotated[Literal["plugin/share/list"], Field(title="Plugin/share/listRequestMethod")]
     params: PluginShareListParams
+
+
+class PluginShareCheckoutRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[
+        Literal["plugin/share/checkout"], Field(title="Plugin/share/checkoutRequestMethod")
+    ]
+    params: PluginShareCheckoutParams
 
 
 class PluginShareDeleteRequest(BaseModel):
@@ -4986,6 +5106,17 @@ class ExperimentalFeatureListRequest(BaseModel):
         Literal["experimentalFeature/list"], Field(title="ExperimentalFeature/listRequestMethod")
     ]
     params: ExperimentalFeatureListParams
+
+
+class PermissionProfileListRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[
+        Literal["permissionProfile/list"], Field(title="PermissionProfile/listRequestMethod")
+    ]
+    params: PermissionProfileListParams
 
 
 class ExperimentalFeatureEnablementSetRequest(BaseModel):
@@ -5424,15 +5555,19 @@ class ConfigRequirements(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
+    allow_appshots: Annotated[bool | None, Field(alias="allowAppshots")] = None
+    allow_managed_hooks_only: Annotated[bool | None, Field(alias="allowManagedHooksOnly")] = None
     allowed_approval_policies: Annotated[
         list[AskForApproval] | None, Field(alias="allowedApprovalPolicies")
     ] = None
+    allowed_permissions: Annotated[list[str] | None, Field(alias="allowedPermissions")] = None
     allowed_sandbox_modes: Annotated[
         list[SandboxMode] | None, Field(alias="allowedSandboxModes")
     ] = None
     allowed_web_search_modes: Annotated[
         list[WebSearchMode] | None, Field(alias="allowedWebSearchModes")
     ] = None
+    computer_use: Annotated[ComputerUseRequirements | None, Field(alias="computerUse")] = None
     enforce_residency: Annotated[ResidencyRequirement | None, Field(alias="enforceResidency")] = (
         None
     )
@@ -5600,13 +5735,19 @@ class InputImageFunctionCallOutputContentItem(BaseModel):
 
 
 class FunctionCallOutputContentItem(
-    RootModel[InputTextFunctionCallOutputContentItem | InputImageFunctionCallOutputContentItem]
+    RootModel[
+        InputTextFunctionCallOutputContentItem
+        | InputImageFunctionCallOutputContentItem
+        | EncryptedContentFunctionCallOutputContentItem
+    ]
 ):
     model_config = ConfigDict(
         populate_by_name=True,
     )
     root: Annotated[
-        InputTextFunctionCallOutputContentItem | InputImageFunctionCallOutputContentItem,
+        InputTextFunctionCallOutputContentItem
+        | InputImageFunctionCallOutputContentItem
+        | EncryptedContentFunctionCallOutputContentItem,
         Field(
             description="Responses API compatible content items that can be returned by a tool call. This is a subset of ContentItem with the types we support as function call outputs."
         ),
@@ -5809,6 +5950,13 @@ class Model(BaseModel):
     ] = []
     availability_nux: Annotated[ModelAvailabilityNux | None, Field(alias="availabilityNux")] = None
     default_reasoning_effort: Annotated[ReasoningEffort, Field(alias="defaultReasoningEffort")]
+    default_service_tier: Annotated[
+        str | None,
+        Field(
+            alias="defaultServiceTier",
+            description="Catalog default service tier id for this model, when one is configured.",
+        ),
+    ] = None
     description: str
     display_name: Annotated[str, Field(alias="displayName")]
     hidden: bool
@@ -5851,38 +5999,18 @@ class OverriddenMetadata(BaseModel):
     overriding_layer: Annotated[ConfigLayerMetadata, Field(alias="overridingLayer")]
 
 
-class ExternalPermissionProfile(BaseModel):
+class PermissionProfileListResponse(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    network: PermissionProfileNetworkPermissions
-    type: Annotated[Literal["external"], Field(title="ExternalPermissionProfileType")]
-
-
-class RestrictedPermissionProfileFileSystemPermissions(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    entries: list[FileSystemSandboxEntry]
-    glob_scan_max_depth: Annotated[int | None, Field(alias="globScanMaxDepth", ge=1)] = None
-    type: Annotated[
-        Literal["restricted"], Field(title="RestrictedPermissionProfileFileSystemPermissionsType")
-    ]
-
-
-class PermissionProfileFileSystemPermissions(
-    RootModel[
-        RestrictedPermissionProfileFileSystemPermissions
-        | UnrestrictedPermissionProfileFileSystemPermissions
-    ]
-):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    root: (
-        RestrictedPermissionProfileFileSystemPermissions
-        | UnrestrictedPermissionProfileFileSystemPermissions
-    )
+    data: list[PermissionProfileSummary]
+    next_cursor: Annotated[
+        str | None,
+        Field(
+            alias="nextCursor",
+            description="Opaque cursor to pass to the next call to continue after the last item. If None, there are no more items to return.",
+        ),
+    ] = None
 
 
 class PluginSharePrincipal(BaseModel):
@@ -6358,6 +6486,30 @@ class ThreadGoal(BaseModel):
     updated_at: Annotated[int, Field(alias="updatedAt")]
 
 
+class ThreadGoalGetResponse(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    goal: ThreadGoal | None = None
+
+
+class ThreadGoalSetParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    objective: str | None = None
+    status: ThreadGoalStatus | None = None
+    thread_id: Annotated[str, Field(alias="threadId")]
+    token_budget: Annotated[int | None, Field(alias="tokenBudget")] = None
+
+
+class ThreadGoalSetResponse(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    goal: ThreadGoal
+
+
 class ThreadGoalUpdatedNotification(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -6562,6 +6714,34 @@ class ThreadListParams(BaseModel):
     ] = None
 
 
+class ThreadSettings(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    active_permission_profile: Annotated[
+        ActivePermissionProfile | None, Field(alias="activePermissionProfile")
+    ] = None
+    approval_policy: Annotated[AskForApproval, Field(alias="approvalPolicy")]
+    approvals_reviewer: Annotated[ApprovalsReviewer, Field(alias="approvalsReviewer")]
+    collaboration_mode: Annotated[CollaborationMode, Field(alias="collaborationMode")]
+    cwd: AbsolutePathBuf
+    effort: ReasoningEffort | None = None
+    model: str
+    model_provider: Annotated[str, Field(alias="modelProvider")]
+    personality: Personality | None = None
+    sandbox_policy: Annotated[SandboxPolicy, Field(alias="sandboxPolicy")]
+    service_tier: Annotated[str | None, Field(alias="serviceTier")] = None
+    summary: ReasoningSummary | None = None
+
+
+class ThreadSettingsUpdatedNotification(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    thread_id: Annotated[str, Field(alias="threadId")]
+    thread_settings: Annotated[ThreadSettings, Field(alias="threadSettings")]
+
+
 class ThreadStartParams(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -6626,7 +6806,6 @@ class ToolsV2(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    view_image: bool | None = None
     web_search: WebSearchToolConfig | None = None
 
 
@@ -6830,6 +7009,15 @@ class ThreadForkRequest(BaseModel):
     params: ThreadForkParams
 
 
+class ThreadGoalSetRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[Literal["thread/goal/set"], Field(title="Thread/goal/setRequestMethod")]
+    params: ThreadGoalSetParams
+
+
 class ThreadListRequest(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -6918,6 +7106,41 @@ class ConfigValueWriteRequest(BaseModel):
     params: ConfigValueWriteParams
 
 
+class Config(BaseModel):
+    model_config = ConfigDict(
+        extra="allow",
+        populate_by_name=True,
+    )
+    analytics: AnalyticsConfig | None = None
+    approval_policy: AskForApproval | None = None
+    approvals_reviewer: Annotated[
+        ApprovalsReviewer | None,
+        Field(
+            description="[UNSTABLE] Optional default for where approval requests are routed for review."
+        ),
+    ] = None
+    compact_prompt: str | None = None
+    desktop: dict[str, Any] | None = None
+    developer_instructions: str | None = None
+    forced_chatgpt_workspace_id: ForcedChatgptWorkspaceIds | None = None
+    forced_login_method: ForcedLoginMethod | None = None
+    instructions: str | None = None
+    model: str | None = None
+    model_auto_compact_token_limit: int | None = None
+    model_auto_compact_token_limit_scope: AutoCompactTokenLimitScope | None = None
+    model_context_window: int | None = None
+    model_provider: str | None = None
+    model_reasoning_effort: ReasoningEffort | None = None
+    model_reasoning_summary: ReasoningSummary | None = None
+    model_verbosity: Verbosity | None = None
+    review_model: str | None = None
+    sandbox_mode: SandboxMode | None = None
+    sandbox_workspace_write: SandboxWorkspaceWrite | None = None
+    service_tier: str | None = None
+    tools: ToolsV2 | None = None
+    web_search: WebSearchMode | None = None
+
+
 class ConfigBatchWriteParams(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -6938,6 +7161,15 @@ class ConfigBatchWriteParams(BaseModel):
             description="When true, hot-reload the updated user config into all loaded threads after writing.",
         ),
     ] = None
+
+
+class ConfigReadResponse(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    config: Config
+    layers: list[ConfigLayer] | None = None
+    origins: dict[str, ConfigLayerMetadata]
 
 
 class ConfigWriteResponse(BaseModel):
@@ -7072,24 +7304,6 @@ class ListMcpServerStatusResponse(BaseModel):
     ] = None
 
 
-class ManagedPermissionProfile(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    file_system: Annotated[PermissionProfileFileSystemPermissions, Field(alias="fileSystem")]
-    network: PermissionProfileNetworkPermissions
-    type: Annotated[Literal["managed"], Field(title="ManagedPermissionProfileType")]
-
-
-class PermissionProfile(
-    RootModel[ManagedPermissionProfile | DisabledPermissionProfile | ExternalPermissionProfile]
-):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    root: ManagedPermissionProfile | DisabledPermissionProfile | ExternalPermissionProfile
-
-
 class PluginShareContext(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -7098,6 +7312,13 @@ class PluginShareContext(BaseModel):
     creator_name: Annotated[str | None, Field(alias="creatorName")] = None
     discoverability: PluginShareDiscoverability | None = None
     remote_plugin_id: Annotated[str, Field(alias="remotePluginId")]
+    remote_version: Annotated[
+        str | None,
+        Field(
+            alias="remoteVersion",
+            description="Version of the remote shared plugin release when available.",
+        ),
+    ] = None
     share_principals: Annotated[
         list[PluginSharePrincipal] | None, Field(alias="sharePrincipals")
     ] = None
@@ -7129,7 +7350,20 @@ class PluginSummary(BaseModel):
     installed: bool
     interface: PluginInterface | None = None
     keywords: list[str] | None = []
+    local_version: Annotated[
+        str | None,
+        Field(
+            alias="localVersion",
+            description="Version of the locally materialized plugin package when available.",
+        ),
+    ] = None
     name: str
+    remote_plugin_id: Annotated[
+        str | None,
+        Field(
+            alias="remotePluginId", description="Backend remote plugin identifier when available."
+        ),
+    ] = None
     share_context: Annotated[
         PluginShareContext | None,
         Field(
@@ -7138,29 +7372,6 @@ class PluginSummary(BaseModel):
         ),
     ] = None
     source: PluginSource
-
-
-class ProfileV2(BaseModel):
-    model_config = ConfigDict(
-        extra="allow",
-        populate_by_name=True,
-    )
-    approval_policy: AskForApproval | None = None
-    approvals_reviewer: Annotated[
-        ApprovalsReviewer | None,
-        Field(
-            description="[UNSTABLE] Optional profile-level override for where approval requests are routed for review. If omitted, the enclosing config default is used."
-        ),
-    ] = None
-    chatgpt_base_url: str | None = None
-    model: str | None = None
-    model_provider: str | None = None
-    model_reasoning_effort: ReasoningEffort | None = None
-    model_reasoning_summary: ReasoningSummary | None = None
-    model_verbosity: Verbosity | None = None
-    service_tier: str | None = None
-    tools: ToolsV2 | None = None
-    web_search: WebSearchMode | None = None
 
 
 class RequestPermissionProfile(BaseModel):
@@ -7209,6 +7420,7 @@ class ResponseItem(
         | WebSearchCallResponseItem
         | ImageGenerationCallResponseItem
         | CompactionResponseItem
+        | CompactionTriggerResponseItem
         | ContextCompactionResponseItem
         | OtherResponseItem
     ]
@@ -7229,6 +7441,7 @@ class ResponseItem(
         | WebSearchCallResponseItem
         | ImageGenerationCallResponseItem
         | CompactionResponseItem
+        | CompactionTriggerResponseItem
         | ContextCompactionResponseItem
         | OtherResponseItem
     )
@@ -7250,6 +7463,16 @@ class ThreadGoalUpdatedServerNotification(BaseModel):
         Literal["thread/goal/updated"], Field(title="Thread/goal/updatedNotificationMethod")
     ]
     params: ThreadGoalUpdatedNotification
+
+
+class ThreadSettingsUpdatedServerNotification(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    method: Annotated[
+        Literal["thread/settings/updated"], Field(title="Thread/settings/updatedNotificationMethod")
+    ]
+    params: ThreadSettingsUpdatedNotification
 
 
 class ThreadTokenUsageUpdatedServerNotification(BaseModel):
@@ -7432,50 +7655,6 @@ class ConfigBatchWriteRequest(BaseModel):
     id: RequestId
     method: Annotated[Literal["config/batchWrite"], Field(title="Config/batchWriteRequestMethod")]
     params: ConfigBatchWriteParams
-
-
-class Config(BaseModel):
-    model_config = ConfigDict(
-        extra="allow",
-        populate_by_name=True,
-    )
-    analytics: AnalyticsConfig | None = None
-    approval_policy: AskForApproval | None = None
-    approvals_reviewer: Annotated[
-        ApprovalsReviewer | None,
-        Field(
-            description="[UNSTABLE] Optional default for where approval requests are routed for review."
-        ),
-    ] = None
-    compact_prompt: str | None = None
-    developer_instructions: str | None = None
-    forced_chatgpt_workspace_id: str | None = None
-    forced_login_method: ForcedLoginMethod | None = None
-    instructions: str | None = None
-    model: str | None = None
-    model_auto_compact_token_limit: int | None = None
-    model_context_window: int | None = None
-    model_provider: str | None = None
-    model_reasoning_effort: ReasoningEffort | None = None
-    model_reasoning_summary: ReasoningSummary | None = None
-    model_verbosity: Verbosity | None = None
-    profile: str | None = None
-    profiles: dict[str, ProfileV2] | None = {}
-    review_model: str | None = None
-    sandbox_mode: SandboxMode | None = None
-    sandbox_workspace_write: SandboxWorkspaceWrite | None = None
-    service_tier: str | None = None
-    tools: ToolsV2 | None = None
-    web_search: WebSearchMode | None = None
-
-
-class ConfigReadResponse(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    config: Config
-    layers: list[ConfigLayer] | None = None
-    origins: dict[str, ConfigLayerMetadata]
 
 
 class ExternalAgentConfigDetectResponse(BaseModel):
@@ -7827,7 +8006,7 @@ class ThreadForkResponse(BaseModel):
     sandbox: Annotated[
         SandboxPolicy,
         Field(
-            description="Legacy sandbox policy retained for compatibility. Experimental clients should prefer `permissionProfile` when they need exact runtime permissions."
+            description="Legacy sandbox policy retained for compatibility. Experimental clients should prefer `activePermissionProfile` for profile provenance."
         ),
     ]
     service_tier: Annotated[str | None, Field(alias="serviceTier")] = None
@@ -7895,7 +8074,7 @@ class ThreadResumeResponse(BaseModel):
     sandbox: Annotated[
         SandboxPolicy,
         Field(
-            description="Legacy sandbox policy retained for compatibility. Experimental clients should prefer `permissionProfile` when they need exact runtime permissions."
+            description="Legacy sandbox policy retained for compatibility. Experimental clients should prefer `activePermissionProfile` for profile provenance."
         ),
     ]
     service_tier: Annotated[str | None, Field(alias="serviceTier")] = None
@@ -7912,6 +8091,14 @@ class ThreadRollbackResponse(BaseModel):
             description="The updated thread after applying the rollback, with `turns` populated.\n\nThe ThreadItems stored in each Turn are lossy since we explicitly do not persist all agent interactions, such as command executions. This is the same behavior as `thread/resume`."
         ),
     ]
+
+
+class ThreadSearchResult(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    snippet: str
+    thread: Thread
 
 
 class ThreadStartResponse(BaseModel):
@@ -7940,7 +8127,7 @@ class ThreadStartResponse(BaseModel):
     sandbox: Annotated[
         SandboxPolicy,
         Field(
-            description="Legacy sandbox policy retained for compatibility. Experimental clients should prefer `permissionProfile` when they need exact runtime permissions."
+            description="Legacy sandbox policy retained for compatibility. Experimental clients should prefer `activePermissionProfile` for profile provenance."
         ),
     ]
     service_tier: Annotated[str | None, Field(alias="serviceTier")] = None
@@ -7982,6 +8169,9 @@ class ClientRequest(
         | ThreadArchiveRequest
         | ThreadUnsubscribeRequest
         | ThreadNameSetRequest
+        | ThreadGoalSetRequest
+        | ThreadGoalGetRequest
+        | ThreadGoalClearRequest
         | ThreadMetadataUpdateRequest
         | ThreadUnarchiveRequest
         | ThreadCompactStartRequest
@@ -7998,11 +8188,13 @@ class ClientRequest(
         | MarketplaceRemoveRequest
         | MarketplaceUpgradeRequest
         | PluginListRequest
+        | PluginInstalledRequest
         | PluginReadRequest
         | PluginSkillReadRequest
         | PluginShareSaveRequest
         | PluginShareUpdateTargetsRequest
         | PluginShareListRequest
+        | PluginShareCheckoutRequest
         | PluginShareDeleteRequest
         | AppListRequest
         | FsReadFileRequest
@@ -8024,6 +8216,7 @@ class ClientRequest(
         | ModelListRequest
         | ModelProviderCapabilitiesReadRequest
         | ExperimentalFeatureListRequest
+        | PermissionProfileListRequest
         | ExperimentalFeatureEnablementSetRequest
         | McpServerOauthLoginRequest
         | ConfigMcpServerReloadRequest
@@ -8063,6 +8256,9 @@ class ClientRequest(
         | ThreadArchiveRequest
         | ThreadUnsubscribeRequest
         | ThreadNameSetRequest
+        | ThreadGoalSetRequest
+        | ThreadGoalGetRequest
+        | ThreadGoalClearRequest
         | ThreadMetadataUpdateRequest
         | ThreadUnarchiveRequest
         | ThreadCompactStartRequest
@@ -8079,11 +8275,13 @@ class ClientRequest(
         | MarketplaceRemoveRequest
         | MarketplaceUpgradeRequest
         | PluginListRequest
+        | PluginInstalledRequest
         | PluginReadRequest
         | PluginSkillReadRequest
         | PluginShareSaveRequest
         | PluginShareUpdateTargetsRequest
         | PluginShareListRequest
+        | PluginShareCheckoutRequest
         | PluginShareDeleteRequest
         | AppListRequest
         | FsReadFileRequest
@@ -8105,6 +8303,7 @@ class ClientRequest(
         | ModelListRequest
         | ModelProviderCapabilitiesReadRequest
         | ExperimentalFeatureListRequest
+        | PermissionProfileListRequest
         | ExperimentalFeatureEnablementSetRequest
         | McpServerOauthLoginRequest
         | ConfigMcpServerReloadRequest
@@ -8133,6 +8332,16 @@ class ClientRequest(
         | FuzzyFileSearchRequest,
         Field(description="Request from the client to the server.", title="ClientRequest"),
     ]
+
+
+class PluginInstalledResponse(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    marketplace_load_errors: Annotated[
+        list[MarketplaceLoadErrorInfo] | None, Field(alias="marketplaceLoadErrors")
+    ] = []
+    marketplaces: list[PluginMarketplaceEntry]
 
 
 class PluginListResponse(BaseModel):
@@ -8166,6 +8375,7 @@ class ServerNotification(
         | ThreadNameUpdatedServerNotification
         | ThreadGoalUpdatedServerNotification
         | ThreadGoalClearedServerNotification
+        | ThreadSettingsUpdatedServerNotification
         | ThreadTokenUsageUpdatedServerNotification
         | TurnStartedServerNotification
         | HookStartedServerNotification
@@ -8235,6 +8445,7 @@ class ServerNotification(
         | ThreadNameUpdatedServerNotification
         | ThreadGoalUpdatedServerNotification
         | ThreadGoalClearedServerNotification
+        | ThreadSettingsUpdatedServerNotification
         | ThreadTokenUsageUpdatedServerNotification
         | TurnStartedServerNotification
         | HookStartedServerNotification
