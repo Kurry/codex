@@ -158,12 +158,13 @@ async fn run_exec_command(args: crate::cli::ExecCommand) -> anyhow::Result<()> {
     let crate::cli::ExecCommand {
         query,
         environment,
+        repo,
         branch,
         attempts,
     } = args;
     let ctx = init_backend("codex_cloud_tasks_exec").await?;
     let prompt = resolve_query_input(query)?;
-    let env_id = resolve_environment_id(&ctx, &environment).await?;
+    let env_id = resolve_exec_environment_id(&ctx, environment.as_deref(), repo.as_deref()).await?;
     let git_ref = resolve_git_ref(branch.as_ref()).await;
     let created = codex_cloud_tasks_client::CloudBackend::create_task(
         &*ctx.backend,
@@ -177,6 +178,42 @@ async fn run_exec_command(args: crate::cli::ExecCommand) -> anyhow::Result<()> {
     let url = util::task_url(&ctx.base_url, &created.id.0);
     println!("{url}");
     Ok(())
+}
+
+async fn resolve_exec_environment_id(
+    ctx: &BackendContext,
+    environment: Option<&str>,
+    repo: Option<&str>,
+) -> anyhow::Result<String> {
+    match (environment, repo) {
+        (Some(environment), None) => resolve_environment_id(ctx, environment).await,
+        (None, Some(repo)) => resolve_environment_id_for_repo(ctx, repo).await,
+        (None, None) => Err(anyhow!("pass either --env ENV_ID or --repo OWNER/REPO")),
+        (Some(_), Some(_)) => Err(anyhow!("pass only one of --env or --repo")),
+    }
+}
+
+async fn resolve_environment_id_for_repo(
+    ctx: &BackendContext,
+    repo: &str,
+) -> anyhow::Result<String> {
+    let normalized = util::normalize_base_url(&ctx.base_url);
+    let headers = util::build_chatgpt_headers().await;
+    let environments =
+        crate::env_detect::list_environments_by_repo(&normalized, &headers, repo).await?;
+    match environments.as_slice() {
+        [] => Err(anyhow!("no cloud environment found for repo '{repo}'")),
+        [single] => Ok(single.id.clone()),
+        [first, rest @ ..] => {
+            if rest.iter().all(|row| row.id == first.id) {
+                Ok(first.id.clone())
+            } else {
+                Err(anyhow!(
+                    "repo '{repo}' has multiple cloud environments; rerun with --env ENV_ID"
+                ))
+            }
+        }
+    }
 }
 
 async fn resolve_environment_id(ctx: &BackendContext, requested: &str) -> anyhow::Result<String> {
@@ -222,6 +259,27 @@ async fn resolve_environment_id(ctx: &BackendContext, requested: &str) -> anyhow
             }
         }
     }
+}
+
+fn environment_json_row(row: &app::EnvironmentRow) -> serde_json::Value {
+    serde_json::json!({
+        "repo": row.repo_hints,
+        "env_id": row.id,
+        "status": row.status,
+        "label": row.label,
+        "is_pinned": row.is_pinned,
+    })
+}
+
+fn format_environment_list_lines(rows: &[app::EnvironmentRow]) -> Vec<String> {
+    rows.iter()
+        .map(|row| {
+            let repo = row.repo_hints.as_deref().unwrap_or("-");
+            let label = row.label.as_deref().unwrap_or("-");
+            let status = row.status.as_deref().unwrap_or("-");
+            format!("{repo}\t{}\t{status}\t{label}", row.id)
+        })
+        .collect()
 }
 
 fn resolve_query_input(query_arg: Option<String>) -> anyhow::Result<String> {
@@ -573,6 +631,36 @@ async fn run_list_command(args: crate::cli::ListCommand) -> anyhow::Result<()> {
     Ok(())
 }
 
+async fn run_list_envs_command(args: crate::cli::ListEnvsCommand) -> anyhow::Result<()> {
+    let ctx = init_backend("codex_cloud_tasks_list_envs").await?;
+    let normalized = util::normalize_base_url(&ctx.base_url);
+    let headers = util::build_chatgpt_headers().await;
+    let environments = if let Some(repo) = args.repo.as_deref() {
+        crate::env_detect::list_environments_by_repo(&normalized, &headers, repo).await?
+    } else {
+        crate::env_detect::list_environments(&normalized, &headers).await?
+    };
+
+    if args.json {
+        let rows = environments
+            .iter()
+            .map(environment_json_row)
+            .collect::<Vec<_>>();
+        println!("{}", serde_json::to_string_pretty(&rows)?);
+        return Ok(());
+    }
+
+    if environments.is_empty() {
+        println!("No environments found.");
+        return Ok(());
+    }
+
+    for line in format_environment_list_lines(&environments) {
+        println!("{line}");
+    }
+    Ok(())
+}
+
 async fn run_diff_command(args: crate::cli::DiffCommand) -> anyhow::Result<()> {
     let ctx = init_backend("codex_cloud_tasks_diff").await?;
     let task_id = parse_task_id(&args.task_id)?;
@@ -732,6 +820,7 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
     if let Some(command) = cli.command {
         return match command {
             crate::cli::Command::Exec(args) => run_exec_command(args).await,
+            crate::cli::Command::ListEnvs(args) => run_list_envs_command(args).await,
             crate::cli::Command::Status(args) => run_status_command(args).await,
             crate::cli::Command::List(args) => run_list_command(args).await,
             crate::cli::Command::Apply(args) => run_apply_command(args).await,
@@ -1054,7 +1143,13 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
                                     if let Some(lbl) = sel.label.clone() {
                                         let present = app.environments.iter().any(|r| r.id == sel.id);
                                         if !present {
-                                            app.environments.push(app::EnvironmentRow { id: sel.id.clone(), label: Some(lbl), is_pinned: false, repo_hints: None });
+                                            app.environments.push(app::EnvironmentRow {
+                                                id: sel.id.clone(),
+                                                label: Some(lbl),
+                                                status: None,
+                                                is_pinned: false,
+                                                repo_hints: None,
+                                            });
                                         }
                                     }
                                     app.env_filter = Some(sel.id);
@@ -2329,6 +2424,44 @@ mod tests {
                 "  env-2  •  0s ago".to_string(),
                 "  no diff".to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn format_environment_list_lines_includes_repo_id_status_and_label() {
+        let rows = vec![app::EnvironmentRow {
+            id: "env_123".to_string(),
+            label: Some("Kurry/codex".to_string()),
+            status: Some("ready".to_string()),
+            is_pinned: true,
+            repo_hints: Some("Kurry/codex".to_string()),
+        }];
+
+        assert_eq!(
+            format_environment_list_lines(&rows),
+            vec!["Kurry/codex\tenv_123\tready\tKurry/codex".to_string()]
+        );
+    }
+
+    #[test]
+    fn environment_json_row_uses_env_id_key() {
+        let row = app::EnvironmentRow {
+            id: "env_123".to_string(),
+            label: Some("Kurry/codex".to_string()),
+            status: None,
+            is_pinned: false,
+            repo_hints: Some("Kurry/codex".to_string()),
+        };
+
+        assert_eq!(
+            environment_json_row(&row),
+            serde_json::json!({
+                "repo": "Kurry/codex",
+                "env_id": "env_123",
+                "status": null,
+                "label": "Kurry/codex",
+                "is_pinned": false,
+            })
         );
     }
 

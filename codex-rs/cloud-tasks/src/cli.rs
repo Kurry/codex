@@ -16,6 +16,9 @@ pub struct Cli {
 pub enum Command {
     /// Submit a new Codex Cloud task without launching the TUI.
     Exec(ExecCommand),
+    /// List Codex Cloud environments.
+    #[clap(name = "list-envs", alias = "envs")]
+    ListEnvs(ListEnvsCommand),
     /// Show the status of a Codex Cloud task.
     Status(StatusCommand),
     /// List Codex Cloud tasks.
@@ -33,8 +36,16 @@ pub struct ExecCommand {
     pub query: Option<String>,
 
     /// Target environment identifier (see `codex cloud` to browse).
-    #[arg(long = "env", value_name = "ENV_ID")]
-    pub environment: String,
+    #[arg(long = "env", value_name = "ENV_ID", conflicts_with = "repo")]
+    pub environment: Option<String>,
+
+    /// Target GitHub repository slug (for example, openai/codex).
+    #[arg(
+        long = "repo",
+        value_name = "OWNER/REPO",
+        conflicts_with = "environment"
+    )]
+    pub repo: Option<String>,
 
     /// Number of assistant attempts (best-of-N).
     #[arg(
@@ -47,6 +58,17 @@ pub struct ExecCommand {
     /// Git branch to run in Codex Cloud (defaults to current branch).
     #[arg(long = "branch", value_name = "BRANCH")]
     pub branch: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct ListEnvsCommand {
+    /// Filter environments by GitHub repository slug.
+    #[arg(long = "repo", value_name = "OWNER/REPO")]
+    pub repo: Option<String>,
+
+    /// Emit JSON instead of plain text.
+    #[arg(long = "json", default_value_t = false)]
+    pub json: bool,
 }
 
 fn parse_attempts(input: &str) -> Result<usize, String> {

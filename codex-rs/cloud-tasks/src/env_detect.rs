@@ -11,6 +11,8 @@ struct CodeEnvironment {
     #[serde(default)]
     label: Option<String>,
     #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
     is_pinned: Option<bool>,
     #[serde(default)]
     task_count: Option<i64>,
@@ -251,6 +253,82 @@ fn parse_owner_repo(url: &str) -> Option<(String, String)> {
     None
 }
 
+pub fn parse_github_repo_slug(slug: &str) -> anyhow::Result<(String, String)> {
+    let trimmed = slug.trim();
+    if trimmed.is_empty() {
+        anyhow::bail!("repo must not be empty");
+    }
+    if let Some((owner, repo)) = parse_owner_repo(trimmed) {
+        return Ok((owner, repo));
+    }
+    let without_git = trimmed.trim_end_matches(".git");
+    let parts = without_git.split('/').collect::<Vec<_>>();
+    if parts.len() == 2
+        && parts
+            .iter()
+            .all(|part| !part.is_empty() && !part.contains(':') && !part.contains('@'))
+    {
+        return Ok((parts[0].to_string(), parts[1].to_string()));
+    }
+    anyhow::bail!("repo must be a GitHub owner/repo slug");
+}
+
+fn by_repo_environments_url(base_url: &str, owner: &str, repo: &str) -> String {
+    if base_url.contains("/backend-api") {
+        format!(
+            "{}/wham/environments/by-repo/{}/{}/{}",
+            base_url, "github", owner, repo
+        )
+    } else {
+        format!(
+            "{}/api/codex/environments/by-repo/{}/{}/{}",
+            base_url, "github", owner, repo
+        )
+    }
+}
+
+fn environment_row_from_code_environment(
+    env: CodeEnvironment,
+    repo_hints: Option<String>,
+) -> crate::app::EnvironmentRow {
+    crate::app::EnvironmentRow {
+        id: env.id,
+        label: env.label,
+        status: env.status,
+        is_pinned: env.is_pinned.unwrap_or(false),
+        repo_hints,
+    }
+}
+
+pub async fn list_environments_by_repo(
+    base_url: &str,
+    headers: &HeaderMap,
+    repo_slug: &str,
+) -> anyhow::Result<Vec<crate::app::EnvironmentRow>> {
+    let (owner, repo) = parse_github_repo_slug(repo_slug)?;
+    let repo_hint = format!("{owner}/{repo}");
+    let url = by_repo_environments_url(base_url, &owner, &repo);
+    let mut rows = get_json::<Vec<CodeEnvironment>>(&url, headers)
+        .await?
+        .into_iter()
+        .map(|env| environment_row_from_code_environment(env, Some(repo_hint.clone())))
+        .collect::<Vec<_>>();
+    rows.sort_by(|a, b| {
+        let p = b.is_pinned.cmp(&a.is_pinned);
+        if p != std::cmp::Ordering::Equal {
+            return p;
+        }
+        let al = a.label.as_deref().unwrap_or("").to_lowercase();
+        let bl = b.label.as_deref().unwrap_or("").to_lowercase();
+        let l = al.cmp(&bl);
+        if l != std::cmp::Ordering::Equal {
+            return l;
+        }
+        a.id.cmp(&b.id)
+    });
+    Ok(rows)
+}
+
 /// List environments for the current repo(s) with a fallback to the global list.
 /// Returns a de-duplicated, sorted set suitable for the TUI modal.
 pub async fn list_environments(
@@ -263,17 +341,7 @@ pub async fn list_environments(
     let origins = get_git_origins();
     for origin in &origins {
         if let Some((owner, repo)) = parse_owner_repo(origin) {
-            let url = if base_url.contains("/backend-api") {
-                format!(
-                    "{}/wham/environments/by-repo/{}/{}/{}",
-                    base_url, "github", owner, repo
-                )
-            } else {
-                format!(
-                    "{}/api/codex/environments/by-repo/{}/{}/{}",
-                    base_url, "github", owner, repo
-                )
-            };
+            let url = by_repo_environments_url(base_url, &owner, &repo);
             match get_json::<Vec<CodeEnvironment>>(&url, headers).await {
                 Ok(list) => {
                     info!("env_tui: by-repo {}:{} -> {} envs", owner, repo, list.len());
@@ -283,12 +351,16 @@ pub async fn list_environments(
                                 .or_insert_with(|| crate::app::EnvironmentRow {
                                     id: e.id.clone(),
                                     label: e.label.clone(),
+                                    status: e.status.clone(),
                                     is_pinned: e.is_pinned.unwrap_or(false),
                                     repo_hints: Some(format!("{owner}/{repo}")),
                                 });
                         // Merge: keep label if present, or use new; accumulate pinned flag
                         if entry.label.is_none() {
                             entry.label = e.label.clone();
+                        }
+                        if entry.status.is_none() {
+                            entry.status = e.status.clone();
                         }
                         entry.is_pinned = entry.is_pinned || e.is_pinned.unwrap_or(false);
                         if entry.repo_hints.is_none() {
@@ -321,11 +393,15 @@ pub async fn list_environments(
                     .or_insert_with(|| crate::app::EnvironmentRow {
                         id: e.id.clone(),
                         label: e.label.clone(),
+                        status: e.status.clone(),
                         is_pinned: e.is_pinned.unwrap_or(false),
                         repo_hints: None,
                     });
                 if entry.label.is_none() {
                     entry.label = e.label.clone();
+                }
+                if entry.status.is_none() {
+                    entry.status = e.status.clone();
                 }
                 entry.is_pinned = entry.is_pinned || e.is_pinned.unwrap_or(false);
             }
@@ -359,4 +435,30 @@ pub async fn list_environments(
         a.id.cmp(&b.id)
     });
     Ok(rows)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_github_repo_slug;
+
+    #[test]
+    fn parse_github_repo_slug_accepts_owner_repo() {
+        let (owner, repo) = parse_github_repo_slug("Kurry/codex").expect("repo slug");
+        assert_eq!(owner, "Kurry");
+        assert_eq!(repo, "codex");
+    }
+
+    #[test]
+    fn parse_github_repo_slug_accepts_github_url() {
+        let (owner, repo) =
+            parse_github_repo_slug("https://github.com/Kurry/codex.git").expect("repo url");
+        assert_eq!(owner, "Kurry");
+        assert_eq!(repo, "codex");
+    }
+
+    #[test]
+    fn parse_github_repo_slug_rejects_invalid_slug() {
+        let err = parse_github_repo_slug("codex").expect_err("invalid slug");
+        assert!(err.to_string().contains("owner/repo"));
+    }
 }
