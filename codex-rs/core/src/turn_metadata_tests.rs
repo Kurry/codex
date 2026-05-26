@@ -89,6 +89,19 @@ async fn build_turn_metadata_header_marks_detached_memory_without_turn_identity(
     );
 }
 
+#[tokio::test]
+async fn build_turn_metadata_header_marks_memory_without_workspace_metadata() {
+    let temp_dir = TempDir::new().expect("temp dir");
+    let cwd = temp_dir.path().abs();
+
+    let header = build_turn_metadata_header(&cwd, /*sandbox*/ None)
+        .await
+        .expect("detached memory should emit its request kind");
+    let parsed: Value = serde_json::from_str(&header).expect("valid json");
+
+    assert_eq!(parsed, serde_json::json!({"request_kind": "memory"}));
+}
+
 #[test]
 fn turn_metadata_state_uses_platform_sandbox_tag() {
     let temp_dir = TempDir::new().expect("temp dir");
@@ -113,7 +126,7 @@ fn turn_metadata_state_uses_platform_sandbox_tag() {
     let thread_id = json.get("thread_id").and_then(Value::as_str);
     let thread_source = json.get("thread_source").and_then(Value::as_str);
 
-    assert_eq!(json["request_kind"].as_str(), Some("turn"));
+    assert!(json.get("request_kind").is_none());
     let expected_sandbox = permission_profile_sandbox_tag(
         &permission_profile,
         WindowsSandboxLevel::Disabled,
@@ -349,7 +362,7 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
     assert_eq!(json["thread_id"].as_str(), Some("thread-a"));
     assert_eq!(json["thread_source"].as_str(), Some("user"));
     assert_eq!(json["turn_id"].as_str(), Some("turn-a"));
-    assert_eq!(json["request_kind"].as_str(), Some("turn"));
+    assert!(json.get("request_kind").is_none());
     assert!(json.get(WINDOW_ID_KEY).is_none());
     assert_eq!(
         json["turn_started_at_unix_ms"].as_i64(),
@@ -361,6 +374,7 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
         .expect("model request header");
     let model_request_json: Value =
         serde_json::from_str(&model_request_header).expect("model request json");
+    assert_eq!(model_request_json["request_kind"].as_str(), Some("turn"));
     assert_eq!(
         model_request_json[WINDOW_ID_KEY].as_str(),
         Some("thread-a:1")

@@ -74,6 +74,7 @@ impl CompactionTurnMetadata {
 #[serde(rename_all = "snake_case")]
 enum TurnMetadataRequestKind {
     Turn,
+    Prewarm,
     Compaction,
     Memory,
 }
@@ -115,12 +116,13 @@ impl From<WorkspaceGitMetadata> for TurnMetadataWorkspace {
 
 /// Base payload for the outbound model request `x-codex-turn-metadata` header.
 ///
-/// Turn-owned requests populate the identity fields. Detached requests such as memory startup
-/// may still emit workspace metadata without pretending to own a foreground turn. The current
-/// logical context-window ID is overlaid only when a turn-owned model request is dispatched.
+/// Turn-owned state populates the identity fields. A concrete request kind is set when the
+/// state is attached to an outbound model request so regular turns, startup prewarm, and
+/// compaction are distinguishable. Detached memory requests are constructed as `memory` directly.
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct TurnMetadataBag {
-    request_kind: TurnMetadataRequestKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    request_kind: Option<TurnMetadataRequestKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -137,7 +139,7 @@ pub(crate) struct TurnMetadataBag {
 
 impl TurnMetadataBag {
     fn new(
-        request_kind: TurnMetadataRequestKind,
+        request_kind: Option<TurnMetadataRequestKind>,
         session_id: Option<String>,
         thread_id: Option<String>,
         thread_source: Option<ThreadSource>,
@@ -186,16 +188,8 @@ pub async fn build_turn_metadata_header(
         get_has_changes(cwd),
     );
     let latest_git_commit_hash = head_commit_hash.map(|sha| sha.0);
-    if latest_git_commit_hash.is_none()
-        && associated_remote_urls.is_none()
-        && has_changes.is_none()
-        && sandbox.is_none()
-    {
-        return None;
-    }
-
     TurnMetadataBag::new(
-        TurnMetadataRequestKind::Memory,
+        Some(TurnMetadataRequestKind::Memory),
         /*session_id*/ None,
         /*thread_id*/ None,
         /*thread_source*/ None,
@@ -231,7 +225,11 @@ fn merge_turn_metadata(
     }
     if let Some(responsesapi_client_metadata) = responsesapi_client_metadata {
         for (key, value) in responsesapi_client_metadata {
-            if key == TURN_STARTED_AT_UNIX_MS_KEY || key == COMPACTION_KEY || key == WINDOW_ID_KEY {
+            if key == TURN_STARTED_AT_UNIX_MS_KEY
+                || key == REQUEST_KIND_KEY
+                || key == COMPACTION_KEY
+                || key == WINDOW_ID_KEY
+            {
                 continue;
             }
             metadata
@@ -277,7 +275,7 @@ impl TurnMetadataState {
             .to_string(),
         );
         let base_metadata = TurnMetadataBag::new(
-            TurnMetadataRequestKind::Turn,
+            /*request_kind*/ None,
             Some(session_id),
             Some(thread_id),
             thread_source,
@@ -364,9 +362,17 @@ impl TurnMetadataState {
         Some(Value::Object(metadata))
     }
 
-    pub(crate) fn current_header_value_for_model_request(&self, window_id: &str) -> Option<String> {
+    fn current_header_value_for_model_request_kind(
+        &self,
+        window_id: &str,
+        request_kind: TurnMetadataRequestKind,
+    ) -> Option<String> {
         let header = self.current_header_value()?;
         let mut metadata = serde_json::from_str::<serde_json::Map<String, Value>>(&header).ok()?;
+        metadata.insert(
+            REQUEST_KIND_KEY.to_string(),
+            serde_json::to_value(request_kind).ok()?,
+        );
         metadata.insert(
             WINDOW_ID_KEY.to_string(),
             Value::String(window_id.to_string()),
@@ -374,17 +380,27 @@ impl TurnMetadataState {
         to_ascii_json_string(&metadata).ok()
     }
 
+    pub(crate) fn current_header_value_for_model_request(&self, window_id: &str) -> Option<String> {
+        self.current_header_value_for_model_request_kind(window_id, TurnMetadataRequestKind::Turn)
+    }
+
+    pub(crate) fn current_header_value_for_prewarm(&self, window_id: &str) -> Option<String> {
+        self.current_header_value_for_model_request_kind(
+            window_id,
+            TurnMetadataRequestKind::Prewarm,
+        )
+    }
+
     pub(crate) fn current_header_value_for_compaction(
         &self,
         window_id: &str,
         compaction: CompactionTurnMetadata,
     ) -> Option<String> {
-        let header = self.current_header_value_for_model_request(window_id)?;
+        let header = self.current_header_value_for_model_request_kind(
+            window_id,
+            TurnMetadataRequestKind::Compaction,
+        )?;
         let mut metadata = serde_json::from_str::<serde_json::Map<String, Value>>(&header).ok()?;
-        metadata.insert(
-            REQUEST_KIND_KEY.to_string(),
-            serde_json::to_value(TurnMetadataRequestKind::Compaction).ok()?,
-        );
         metadata.insert(
             COMPACTION_KEY.to_string(),
             serde_json::to_value(compaction).ok()?,
