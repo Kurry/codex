@@ -359,6 +359,7 @@ impl ChatWidget {
         let encoded_mentions = mention_bindings
             .iter()
             .map(|binding| LinkedMention {
+                sigil: binding.sigil,
                 mention: binding.mention.clone(),
                 path: binding.path.clone(),
             })
